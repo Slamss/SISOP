@@ -61,7 +61,7 @@ public class Sistema {
 		private int pc; 			// ... composto de  counter,
 		private Word ir; 			// instruction register,
 		private int[] reg;       	// registradores da CPU
-		Semaphore cpuSemaphore;     // semaforo responsável por controlar a execução da cpu
+		private Semaphore cpuSemaphore;     // semaforo responsável por controlar a execução da cpu
 
 		private Interruptions interruptions;              // CPU instancia as interrupções 
 		private InterruptionsHandler interruptionHandler; // CPU instancia o manipulador de exceções
@@ -269,7 +269,7 @@ public class Sistema {
 		public ProcessManager processManager;        // gerente de processo
 		public IoMenager ioManager;                  // gerente de IO
 		public Semaphore menuSemaphore = new Semaphore(0); // semaforo responsavel por controlar o menu
-		Semaphore cpuSemaphore = new Semaphore(0); // semaforo responsável por controlar a execução da cpu
+		public Semaphore cpuSemaphore = new Semaphore(0);  // semaforo responsável por controlar a execução da cpu
 
         public VM(InterruptionsHandler interruptionHandler, TrapHandler trapHandler) {   // vm deve ser configurada com endereço de tratamento de interrupcoes
 			// memória
