@@ -9,9 +9,12 @@
 // Fase 3 - chamadas de sistema
 // Fase 4 - Gerente de Memória
 // Fase 5 - Gerente de Processo
+// Fase 6 - IO Concorrente
+// Fase 7 - Shell Concorrente 
 
 
 import java.util.*;
+import java.util.concurrent.Semaphore;
 
 public class Sistema {
 	// -------------------------------------------------------------------------------------------------------
@@ -46,16 +49,19 @@ public class Sistema {
 		interruptionStop,                // ocorre quando o programa se encerra
 		interruptionNone,                // interrupção padrão, ocorre quando não há interrupção
 		interruptionInvalidPageAccessed, // interrupção de pagina inválida, ocorre quando tentamos traduzir de memoria logica para fisica e acessamos uma pagina invalida 
-		interruptionSchedulerClock;      // interrupção de escolonamento, ocorre quando temos um problema no escalonador
+		interruptionSchedulerClock,      // interrupção de escolonamento, ocorre quando temos um problema no escalonador
+		interruptionConcorrenteIO;       // interrupção de ...
 	}
 
-	public boolean enableProcessMenagerWarnings = false;
+	public static final int pageLength = 16;                      // voce pode configurar a quantidade da pagina apenas alterando o valor aqui
+	public static boolean enableProcessMenagerWarnings = false;   // essa variável controla se os avisos do gerenciador de processos serão exibidos ou não
 
-	public class CPU {
+	public class CPU extends Thread {
 									// característica do processador: contexto da CPU ...
 		private int pc; 			// ... composto de  counter,
 		private Word ir; 			// instruction register,
 		private int[] reg;       	// registradores da CPU
+		Semaphore cpuSemaphore = new Semaphore(0); // semaforo responsável por controlar a execução da cpu
 
 		private Interruptions interruptions;              // CPU instancia as interrupções 
 		private InterruptionsHandler interruptionHandler; // CPU instancia o manipulador de exceções
@@ -67,12 +73,10 @@ public class Sistema {
 		private int schedulerRunningClock = 0;   // armazena o clock atual do scheduler em que o programa está rodando
 		final private int schedulerMaxClock = 5; // voce pode configurar a quantidade de execuções que o clock irá fazer em cada processo
 
-		final int pageLength = 16;      // voce pode configurar a quantidade da pagina apenas alterando o valor aqui
-		private int[] runningPageTable; // armazena as paginas de execução de um processo		
+		private int[] runningPageTable; // armazena as paginas de execução de um processo
+		public boolean isCpuAtiva = false; // armazena se a cpu está ativa ou não			
 
 		private Word[] m;   // CPU acessa MEMORIA, guarda referencia 'm' a ela. memoria nao muda. ee sempre a mesma.
-			
-		//private Aux aux = new Aux();
 
 		public CPU(Word[] _m, InterruptionsHandler interruptionHandler, TrapHandler trapHandler) {  // referencia a MEMORIA, interruptions handler e trap handler passada na criacao da CPU
 			m = _m; 				                     // usa o atributo 'm' para acessar a memoria
@@ -121,119 +125,133 @@ public class Sistema {
 		}
 
 		public void run() { 		// execucao da CPU supoe que o contexto da CPU, vide acima, esta devidamente setado
-			while (true) { 			// ciclo de instrucoes. acaba cfe instrucao, veja cada caso.
-				// FETCH
-				if (isMemoryAddressValid(translateToPhysicalMemoryAddress(pc))) {  // verifica se o valor de memória é válido
-					ir = m[translateToPhysicalMemoryAddress(pc)]; 	// busca posicao da memoria apontada por pc, guarda em ir
-					//if debug
-					//showState();
-				    // EXECUTA INSTRUCAO NO ir
-					switch (ir.opc) { // para cada opcode, sua execução
-						case LDI: // Rd ← k
-							reg[ir.r1] = ir.p;
-							pc++;
-							break;
-
-						case STD: // [A] ← Rs
-							if (!isMemoryAddressValid(translateToPhysicalMemoryAddress(ir.p))) { 
-								interruptions = Interruptions.interruptionInvalidAddress; // precisamos tratar antes pois de executar, pois se deixar para depois o java irá para o programa por causa da exceção do próprio java
-								break;
-							}
-							m[translateToPhysicalMemoryAddress(ir.p)].opc = Opcode.DATA;
-							m[translateToPhysicalMemoryAddress(ir.p)].p = reg[ir.r1];
-							pc++;
-							break;
-
-						case ADD: // Rd ← Rd + Rs
-							try {
-								reg[ir.r1] = Math.addExact(reg[ir.r1], reg[ir.r2]);
-							} catch(ArithmeticException exception){
-								interruptions = Interruptions.interruptionOverflowOperation; // precisamos tratar pois caso ocorra alguma exceção em uma operação matemática precisamos alterar a interruptions para uma interrupção de overflow
-							}	
-							pc++;
-							break;
-
-						case MULT: // Rd ← Rd * Rs
-							try {
-								reg[ir.r1] = Math.multiplyExact(reg[ir.r1], reg[ir.r2]);
-							} catch (ArithmeticException exception) {
-								interruptions = Interruptions.interruptionOverflowOperation; // precisamos tratar pois caso ocorra alguma exceção em uma operação matemática precisamos alterar a interruptions para uma interrupção de overflow
-							}							
-							pc++;
-							break;
-
-						case ADDI: // Rd ← Rd + k
-							try {
-								reg[ir.r1] = Math.addExact(reg[ir.r1], ir.p);
-							} catch(ArithmeticException exception){
-								interruptions = Interruptions.interruptionOverflowOperation; // precisamos tratar pois caso ocorra alguma exceção em uma operação matemática precisamos alterar a interruptions para uma interrupção de overflow
-							}			
-							pc++;
-							break;
-
-						case STX: // [Rd] ←Rs
-							if (!isMemoryAddressValid(translateToPhysicalMemoryAddress(reg[ir.r1]))) {
-								interruptions = Interruptions.interruptionInvalidAddress; // precisamos tratar antes pois de executar, pois se deixar para depois o java irá para o programa por causa da exceção do próprio java
-							}
-							m[translateToPhysicalMemoryAddress(reg[ir.r1])].opc = Opcode.DATA;      
-							m[translateToPhysicalMemoryAddress(reg[ir.r1])].p = reg[ir.r2];          
-							pc++;
-							break;
-
-						case SUB: // Rd ← Rd - Rs
-							try { 
-								reg[ir.r1] = Math.subtractExact(reg[ir.r1], reg[ir.r2]);
-							} catch(ArithmeticException exception){
-								interruptions = Interruptions.interruptionOverflowOperation;  // precisamos tratar pois caso ocorra alguma exceção em uma operação matemática precisamos alterar a interruptions para uma interrupção de overflow
-							}							
-							pc++;
-							break;
-
-						case JMP: //  PC ← k
-							if (!isMemoryAddressValid(translateToPhysicalMemoryAddress(ir.p))){ 
-								interruptions = Interruptions.interruptionInvalidAddress;
-							}
-							pc = ir.p;
-						    break;
-						
-						case JMPIG: // If Rc > 0 Then PC ← Rs Else PC ← PC +1
-							if (reg[ir.r2] > 0) {
-								pc = reg[ir.r1];
-							} else {
-								pc++;
-							}
-							break;
-
-						case JMPIE: // If Rc = 0 Then PC ← Rs Else PC ← PC +1
-							if (reg[ir.r2] == 0) {
-								pc = reg[ir.r1];
-							} else {
-								pc++;
-							}
-							break;
-
-						case STOP: // por enquanto, para execucao
-							interruptions = Interruptions.interruptionStop; // adiciona a interrupção de stop caso tenha uma parada
-							break;
-
-						case TRAP:
-							trapHandler.trap(this);
-							pc++;
-							break;
-
-						default:
-							interruptions = Interruptions.interruptionInvalidInstruction;
-							break;
-					}
-					schedulerRunningClock++;
-					if  (schedulerRunningClock >= schedulerMaxClock) {
-						interruptions = Interruptions.interruptionSchedulerClock; // adiciona a interrupção do escalonador caso tenha um numero de clocks maior ou igual ao limite definido
-					}
+			while (true) {
+				boolean trapOcorreu = false;
+				try {
+					cpuSemaphore.acquire();  // tenta dar acquire no semaforo da CPU para realizar o processo
+				} catch (Exception e) {
+					System.out.println("!!! Semaphoro sendo utilizado, ocorreu um erro ao tentar dar acquire !!!"); // caso ocorra algum erro no acquire ele exibe a mensagem
 				}
-				// VERIFICA INTERRUPÇÃO !!! - TERCEIRA FASE DO CICLO DE INSTRUÇÕES
-				if (!(interruptions == Interruptions.interruptionNone)) {
-					interruptionHandler.handle(interruptions); // pega a interruption armazenada e manda ela para o manipulador de interrupções
-					break; 									   // break sai do loop da cpu
+				while (true) { 			// ciclo de instrucoes. acaba cfe instrucao, veja cada caso.
+					// FETCH
+					if (isMemoryAddressValid(translateToPhysicalMemoryAddress(pc))) {  // verifica se o valor de memória é válido
+						ir = m[translateToPhysicalMemoryAddress(pc)]; 	// busca posicao da memoria apontada por pc, guarda em ir
+						//if debug
+						//showState();
+						// EXECUTA INSTRUCAO NO ir
+						switch (ir.opc) { // para cada opcode, sua execução
+							case LDI: // Rd ← k
+								reg[ir.r1] = ir.p;
+								pc++;
+								break;
+
+							case STD: // [A] ← Rs
+								if (!isMemoryAddressValid(translateToPhysicalMemoryAddress(ir.p))) { 
+									interruptions = Interruptions.interruptionInvalidAddress; // precisamos tratar antes pois de executar, pois se deixar para depois o java irá para o programa por causa da exceção do próprio java
+									break;
+								}
+								m[translateToPhysicalMemoryAddress(ir.p)].opc = Opcode.DATA;
+								m[translateToPhysicalMemoryAddress(ir.p)].p = reg[ir.r1];
+								pc++;
+								break;
+
+							case ADD: // Rd ← Rd + Rs
+								try {
+									reg[ir.r1] = Math.addExact(reg[ir.r1], reg[ir.r2]);
+								} catch(ArithmeticException exception){
+									interruptions = Interruptions.interruptionOverflowOperation; // precisamos tratar pois caso ocorra alguma exceção em uma operação matemática precisamos alterar a interruptions para uma interrupção de overflow
+								}	
+								pc++;
+								break;
+
+							case MULT: // Rd ← Rd * Rs
+								try {
+									reg[ir.r1] = Math.multiplyExact(reg[ir.r1], reg[ir.r2]);
+								} catch (ArithmeticException exception) {
+									interruptions = Interruptions.interruptionOverflowOperation; // precisamos tratar pois caso ocorra alguma exceção em uma operação matemática precisamos alterar a interruptions para uma interrupção de overflow
+								}							
+								pc++;
+								break;
+
+							case ADDI: // Rd ← Rd + k
+								try {
+									reg[ir.r1] = Math.addExact(reg[ir.r1], ir.p);
+								} catch(ArithmeticException exception){
+									interruptions = Interruptions.interruptionOverflowOperation; // precisamos tratar pois caso ocorra alguma exceção em uma operação matemática precisamos alterar a interruptions para uma interrupção de overflow
+								}			
+								pc++;
+								break;
+
+							case STX: // [Rd] ←Rs
+								if (!isMemoryAddressValid(translateToPhysicalMemoryAddress(reg[ir.r1]))) {
+									interruptions = Interruptions.interruptionInvalidAddress; // precisamos tratar antes pois de executar, pois se deixar para depois o java irá para o programa por causa da exceção do próprio java
+								}
+								m[translateToPhysicalMemoryAddress(reg[ir.r1])].opc = Opcode.DATA;      
+								m[translateToPhysicalMemoryAddress(reg[ir.r1])].p = reg[ir.r2];          
+								pc++;
+								break;
+
+							case SUB: // Rd ← Rd - Rs
+								try { 
+									reg[ir.r1] = Math.subtractExact(reg[ir.r1], reg[ir.r2]);
+								} catch(ArithmeticException exception){
+									interruptions = Interruptions.interruptionOverflowOperation;  // precisamos tratar pois caso ocorra alguma exceção em uma operação matemática precisamos alterar a interruptions para uma interrupção de overflow
+								}							
+								pc++;
+								break;
+
+							case JMP: //  PC ← k
+								if (!isMemoryAddressValid(translateToPhysicalMemoryAddress(ir.p))){ 
+									interruptions = Interruptions.interruptionInvalidAddress;
+								}
+								pc = ir.p;
+								break;
+							
+							case JMPIG: // If Rc > 0 Then PC ← Rs Else PC ← PC +1
+								if (reg[ir.r2] > 0) {
+									pc = reg[ir.r1];
+								} else {
+									pc++;
+								}
+								break;
+
+							case JMPIE: // If Rc = 0 Then PC ← Rs Else PC ← PC +1
+								if (reg[ir.r2] == 0) {
+									pc = reg[ir.r1];
+								} else {
+									pc++;
+								}
+								break;
+
+							case STOP: // por enquanto, para execucao
+								interruptions = Interruptions.interruptionStop; // adiciona a interrupção de stop caso tenha uma parada
+								break;
+
+							case TRAP:
+								trapOcorreu = true;
+								pc++;
+								trapHandler.trap(this);
+								break;
+
+							default:
+								interruptions = Interruptions.interruptionInvalidInstruction;
+								break;
+						}
+						schedulerRunningClock++;
+						if  (schedulerRunningClock >= schedulerMaxClock) {
+							interruptions = Interruptions.interruptionSchedulerClock; // adiciona a interrupção do escalonador caso tenha um numero de clocks maior ou igual ao limite definido
+						}
+					}
+					// VERIFICA INTERRUPÇÃO !!! - TERCEIRA FASE DO CICLO DE INSTRUÇÕES
+					if (!(interruptions == Interruptions.interruptionNone)) {
+						interruptionHandler.handle(interruptions); // pega a interruption armazenada e manda ela para o manipulador de interrupções
+						if(interruptions != Interruptions.interruptionConcorrenteIO) { // se a interruption nao for a do IO
+							break; // break sai do loop da cpu
+						}
+					}
+					if(trapOcorreu) {
+						break; // break sai do loop da cpu
+					}
 				}
 			}
 		}
@@ -243,11 +261,13 @@ public class Sistema {
     // ------------------- V M  - constituida de CPU e MEMORIA -----------------------------------------------
     // -------------------------- atributos e construcao da VM -----------------------------------------------
 	public class VM {
-		public int tamMem;                    // tamanho da memoria
-        public Word[] m;                      // lista de palavra
-		public CPU cpu;                       // cpu do sistema
-		public MemoryManager memoryManager;   // gerente de memoria
-		public ProcessManager processManager; // gerente de processo
+		public int tamMem;                           // tamanho da memoria
+        public Word[] m;                             // lista de palavra
+		public CPU cpu;                              // cpu do sistema
+		public MemoryManager memoryManager;          // gerente de memoria
+		public ProcessManager processManager;        // gerente de processo
+		public IoMenager ioManager;                  // gerente de IO
+		public Semaphore menuSemaphore = new Semaphore(0); // semaforo do menu
 
         public VM(InterruptionsHandler interruptionHandler, TrapHandler trapHandler) {   // vm deve ser configurada com endereço de tratamento de interrupcoes
 			// memória
@@ -260,7 +280,8 @@ public class Sistema {
 			 cpu.minMemoryBorder = 0;
 			 cpu.maxMemoryBorder = tamMem - 1;			 
 
-			 memoryManager = new MemoryManager(cpu);
+			 ioManager = new IoMenager(m);
+			 memoryManager = new MemoryManager(m);
 			 processManager = new ProcessManager(cpu, memoryManager);
 	    }	
 	}
@@ -272,6 +293,10 @@ public class Sistema {
 	// -------------------------------------------------------------------------------------------------------
 	// -------------------------------------------------------------------------------------------------------
 	// ------------------- S O F T W A R E - inicio ----------------------------------------------------------
+	public enum ProcessState {
+		FINISHED, BLOCKED, RUNNING, READY
+	}
+
 	public class InterruptionsHandler {
 		public void handle(Interruptions interruptions) {
 			switch (interruptions) {
@@ -280,6 +305,9 @@ public class Sistema {
 					break;
 				case interruptionSchedulerClock:
 					handleScheduler(interruptions);
+					break;
+				case interruptionConcorrenteIO:
+					handleIO(interruptions);					
 					break;
 				default:
 					defaultInterruptionCase(interruptions);
@@ -302,6 +330,22 @@ public class Sistema {
 				System.out.println("----------------------------------------------------- ");
 			}
 			vm.cpu.schedulerRunningClock = 0;
+			if(vm.processManager.runningProcess != null) {
+				vm.processManager.saveCpuContext();
+				if(vm.processManager.runningProcess.processState == ProcessState.RUNNING) {
+					vm.processManager.runningProcess.processState = ProcessState.READY;
+					vm.processManager.setCurrentProcess();
+				}
+			}
+			vm.processManager.schedulerProcess();
+		}
+
+		public void handleIO (Interruptions interruptions) {
+			if (enableProcessMenagerWarnings) {
+				System.out.println("Processo será finalizado(" + interruptions + ")!!!");
+				System.out.println("----------------------------------------------------- ");
+			}
+			vm.processManager.finalizeConcorrenteIO();
 			vm.processManager.schedulerProcess();
 		}
 
@@ -314,42 +358,27 @@ public class Sistema {
 	}
 
 	public class TrapHandler {
-		Aux aux = new Aux();
-
 		public void trap(CPU cpu) {
-			System.out.println("**  ------ Chamada de sistema -----------------  **");
-			System.out.println("Opa... Uma chamada de sistema ocorreu!!! --> " + " | " + cpu.reg[8] + " | " + cpu.reg[9] + " | ");
-
-			switch (cpu.reg[8]) { // verificamos o que está armazenado no registrador 8, pois é nele que temos armazenado o que precisa ser feito na chamada do sistema
-				case 1: // caso o valor seja 1, nós armazenamos o valor do inserido no input no registrador 9
-					System.out.println(" --> Por favor digite um valor, apenas inteiros!!! ");
-					Scanner keyboardInput = new Scanner(System.in);
-					int keyboardValue = keyboardInput.nextInt();
-					cpu.m[cpu.reg[9]].p = keyboardValue; // armazena o valor digitado
-					cpu.m[cpu.reg[9]].opc = Opcode.DATA; // armazena o destimo como DATA
-					System.out.printf(" --> Valor armazenado na posição: " + cpu.reg[9] + " --> Valor armazenado: "); // exibe o valor armazenado
-					aux.dump(cpu.m[cpu.reg[9]]); // realoca a memoria da VM ao endereço de memória que foi armazenado no registrador 9
-					break;
-				case 2: // caso o valor seja 2, nós exibimos o dado armazenado no registrador 9
-					System.out.printf(" --> Output do sistema: ");
-					aux.dump(cpu.m[cpu.reg[9]]);
-					break;
-			}
-			System.out.println("**  -------------------------------------------  **");
+			ProcessControlBlock currentProcessRunning = vm.processManager.getProcessRunning();
+			vm.processManager.saveCpuContext(); // salva o estado do processo e bloqueia ele, apos isso escolhe um novo processo para rodar
+			currentProcessRunning.processState = ProcessState.BLOCKED;
+			vm.ioManager.addIO(currentProcessRunning, cpu.reg[8], cpu.reg[9]);
+			vm.processManager.setBlockedProcess(currentProcessRunning);
+			vm.processManager.schedulerProcess(); // avisa o gerente de processos para rodar outro processo enquanto espera o IO finalizar
+			vm.ioManager.ioSemaphore.release();
 		}
-
 	}
 
 	public class MemoryManager {
-		private CPU cpu;
+		private Word[] memory;
 		int freeFrames;
 		int amountOfFrames;
 		int assignedFrames = 0;
 		private Boolean[] freeFrameMemoryMap;
 	
-		public MemoryManager(CPU cpu) {
-			this.cpu = cpu;
-			this.freeFrames = cpu.m.length/cpu.pageLength;
+		public MemoryManager(Word[] memory) {
+			this.memory = memory;
+			this.freeFrames = memory.length/pageLength;
 			this.amountOfFrames = freeFrames;
 			this.freeFrameMemoryMap = new Boolean[freeFrames];
 			for(int i = 0; i<freeFrames; i++) {
@@ -377,23 +406,23 @@ public class Sistema {
 				System.out.println("ERRO ao Alocar Memória, Tamanho de Palavra Inválido, Operação Abortada!!!");
 				return null;
 			}
-			int requestedFrames = (int)Math.ceil((double)w.length/(double)cpu.pageLength);  // calcula quantos frames serão necessários
+			int requestedFrames = (int)Math.ceil((double)w.length/(double)pageLength);      // calcula quantos frames serão necessários
 			if (requestedFrames <= freeFrames) {                                            // verifica se temos a quantidade de frames necessárias				
 				int[] frames = new int[requestedFrames];                                    // array utilizado para armazenar os frames da palavra	
 				int lastAddedIdx = 0;                                                       // index utilizado para iterar os dados recebidos
 				
 				for(int currentFrame = 0; currentFrame < requestedFrames; currentFrame++) { // preenche os frames de acordo com o tamanho da palavra
 					int frame = findFreeFrame();                                            // procura um frame livre	
-					for(int offset = 0; offset < cpu.pageLength; offset++) { // preenche a posição da memória adequada com os dados
+					for(int offset = 0; offset < pageLength; offset++) { // preenche a posição da memória adequada com os dados
 						if(lastAddedIdx + offset >= w.length) {
 							break;
 						}
-						cpu.m[frame * cpu.pageLength + offset].opc = w[lastAddedIdx + offset].opc;
-						cpu.m[frame * cpu.pageLength + offset].r1 = w[lastAddedIdx + offset].r1;
-						cpu.m[frame * cpu.pageLength + offset].r2 = w[lastAddedIdx + offset].r2;
-						cpu.m[frame * cpu.pageLength + offset].p = w[lastAddedIdx + offset].p;
+						memory[frame * pageLength + offset].opc = w[lastAddedIdx + offset].opc;
+						memory[frame * pageLength + offset].r1 = w[lastAddedIdx + offset].r1;
+						memory[frame * pageLength + offset].r2 = w[lastAddedIdx + offset].r2;
+						memory[frame * pageLength + offset].p = w[lastAddedIdx + offset].p;
 					}
-					lastAddedIdx = lastAddedIdx + cpu.pageLength; // controla a iteração em cima de w
+					lastAddedIdx = lastAddedIdx + pageLength;     // controla a iteração em cima de w
 					freeFrameMemoryMap[frame] = true;             // marcamos o frame no mapa como ocupado
 					frames[currentFrame] = frame;                 // guardamos o numero do frame
 					freeFrames--;                                 // reduzimos a quantidade de frames disponiveis
@@ -423,7 +452,7 @@ public class Sistema {
 		int[] processMemoryPage;
 		int pc;
 		int[] reg;
-		boolean isFinished;
+		ProcessState processState;
 
 		public Integer getProcessUniqueId () {
 			return uniqueId;
@@ -434,7 +463,7 @@ public class Sistema {
 			this.processMemoryPage = processMemoryPage;
 			this.pc = 0;
 			this.reg = new int[10];
-			this.isFinished = false;
+			this.processState = ProcessState.READY;
 		}
 	}
 
@@ -444,6 +473,7 @@ public class Sistema {
 		private CPU cpu;
 		private MemoryManager memoryManager;
 		private ArrayList<ProcessControlBlock> runningProcessList = new ArrayList<>();
+		private ArrayList<ProcessControlBlock> blockedProcessList = new ArrayList<>();
 	
 		public ProcessManager(CPU cpu, MemoryManager memoryManager) {
 			this.cpu = cpu;
@@ -460,24 +490,18 @@ public class Sistema {
 			ProcessControlBlock newProgram = new ProcessControlBlock(lastUniqueProcessId, processMemoryPage);
 			runningProcessList.add(newProgram);
 			lastUniqueProcessId++;
+			// schedulerProcess();
 			return true;
 		}
 	
 		// método utilizado para rodar os programas da lista de processos, esse método roda os programas em ordem de criação!!
 		public boolean runProcess() {
-			try {
-				runningProcess = runningProcessList.get(0);
-
-				if (enableProcessMenagerWarnings) {
-					System.out.println("Programa número " + (runningProcess.getProcessUniqueId()+1) + " está sendo executado");
-				}
-
-				runningProcessList.remove(runningProcess);
-			} catch(IndexOutOfBoundsException e){
-				return false;
+			runningProcess = runningProcessList.get(0);
+			if (enableProcessMenagerWarnings) {
+				System.out.println("Programa número " + (runningProcess.getProcessUniqueId()+1) + " está sendo executado");
 			}
-			cpu.setContext(0, cpu.minMemoryBorder, cpu.maxMemoryBorder, runningProcess.processMemoryPage);
-			cpu.run();
+			cpu.start();
+			schedulerProcess();
 			return true;
 		}
 		
@@ -490,7 +514,7 @@ public class Sistema {
 				return false;
 			}
 			cpu.setContext(0, cpu.minMemoryBorder, cpu.maxMemoryBorder, currentRunningProcess.processMemoryPage);
-			cpu.run();
+			cpu.start();
 			return true;
 		}
 
@@ -526,31 +550,175 @@ public class Sistema {
 	
 		// método utiolizado para gerenciar os processos, esse método executa a troca de processo executado entre um intervalo de tempo X, definido na CPU do sistema.
 		public void schedulerProcess() {
-			runningProcess.reg = cpu.reg;
-			runningProcess.pc = cpu.pc;	
-			if(!runningProcess.isFinished) {
-				runningProcessList.add(runningProcess);
-			}	
 			if(!runningProcessList.isEmpty()) {
-				runningProcess = runningProcessList.get(0);
-				runningProcessList.remove(runningProcess);
-				if (enableProcessMenagerWarnings) {
-					System.out.println("Programa número " + (runningProcess.getProcessUniqueId()+1) + " está sendo executado");
+				if (runningProcessList.get(0).processState == ProcessState.READY) {
+					runningProcess = runningProcessList.get(0);
+					runningProcessList.remove(runningProcess);
+					if (enableProcessMenagerWarnings) {
+						System.out.println("Programa número " + (runningProcess.getProcessUniqueId()+1) + " está sendo executado");
+					}
+					cpu.pc = runningProcess.pc;
+					cpu.reg = runningProcess.reg;
+					cpu.runningPageTable = runningProcess.processMemoryPage;
+					cpu.interruptions = Interruptions.interruptionNone;
+					vm.cpu.isCpuAtiva = true;
+					runningProcess.processState = ProcessState.RUNNING;
+					vm.cpu.cpuSemaphore.release();
+				} else { 
+					ProcessControlBlock auxProcess = runningProcessList.get(0);
+					runningProcessList.remove(0);
+					runningProcessList.add(auxProcess);
 				}
-				cpu.pc = runningProcess.pc;
-				cpu.reg = runningProcess.reg;
-				cpu.runningPageTable = runningProcess.processMemoryPage;
-				cpu.interruptions = Interruptions.interruptionNone;
-				cpu.run();
 			}
 		}
-	
+
+		public ProcessControlBlock getProcessRunning() {
+			return runningProcess;
+		}
+
+		public void setCurrentProcess() {
+			runningProcessList.add(runningProcess);
+		}
+
+		public void setBlockedProcess(ProcessControlBlock process) {
+			blockedProcessList.add(process);
+		}
+
+		public void saveCpuContext() {
+			runningProcess.reg = cpu.reg;
+			runningProcess.pc = cpu.pc;
+		}
+
 		public void stopProcess() {
-			runningProcess.isFinished = true;
-			if (enableProcessMenagerWarnings) {
-				System.out.println("Programa número " + (runningProcess.getProcessUniqueId()+1) + " foi finalizado.");
-			}			
+			vm.cpu.isCpuAtiva = false;
+			runningProcess.processState = ProcessState.FINISHED;
+			System.out.println("Programa número " + (runningProcess.getProcessUniqueId()+1) + " foi finalizado.");
 			schedulerProcess();
+		}
+
+		public ProcessControlBlock removeBlockedProcess(ProcessControlBlock process) {
+			ProcessControlBlock processControlBlock = blockedProcessList.get(0);
+			blockedProcessList.remove(processControlBlock);
+			return processControlBlock;
+		}
+
+		public void finalizeConcorrenteIO() {
+			ProcessControlBlock processControlBlock = blockedProcessList.get(0);
+			blockedProcessList.remove(processControlBlock);
+			processControlBlock.processState = ProcessState.READY;
+			runningProcessList.add(processControlBlock);
+			// schedulerProcess();
+		}
+	}
+
+	public class IoMenager extends Thread {
+		public ArrayList<Integer> menuOption = new ArrayList<Integer>();
+		private ArrayList<IoRequest> ioRequestList = new ArrayList<IoRequest>();
+		private Word[] memory;
+		private Semaphore ioSemaphore = new Semaphore(0);
+
+		public IoMenager(Word[] _memory) {
+			this.memory = _memory;
+		}
+
+		public class IoRequest {
+			ProcessControlBlock process;
+			int reg8;
+			int reg9;
+
+			public IoRequest(ProcessControlBlock process, int reg8) {
+				this.process = process;
+				this.reg8 = reg8;
+			}
+
+			public IoRequest(ProcessControlBlock process, int reg8, int reg9) {
+				this.process = process;
+				this.reg8 = reg8;
+				this.reg9 = reg9;
+			}
+		}
+
+		public int translateToPhysicalMemoryAddress(ProcessControlBlock someProcess, int logicMemoryAddress) { // método desenvolvido conforme recomendação do PDF do enunciado da fase 4
+			int page = logicMemoryAddress/Sistema.pageLength;   // tópico 1.4 utilizado como referência
+			int offset = logicMemoryAddress%Sistema.pageLength;
+			int physicalMemoryAddress;
+			try {
+				physicalMemoryAddress = someProcess.processMemoryPage[page]*Sistema.pageLength+offset;
+			} catch (IndexOutOfBoundsException e) {
+				vm.cpu.interruptions = Interruptions.interruptionInvalidPageAccessed;
+				return -1;
+			}
+			return physicalMemoryAddress;
+		}
+
+		public void run() {
+			while (true) {
+				try {
+					ioSemaphore.acquire();
+				} catch (Exception e) {
+					System.out.println("!!! Semaphoro sendo utilizado, ocorreu um erro ao tentar dar acquire !!!"); // caso ocorra algum erro no acquire ele exibe a mensagem
+				}
+				IoRequest currentIORequest = ioRequestList.get(0);
+				ioRequestList.remove(0);
+				switch (currentIORequest.reg8) { // o registrador 8 armazena a chamada de sistema, o valor que define o que deve ser feito
+					case 1: // trap input
+						System.out.println("Programa número " + (currentIORequest.process.getProcessUniqueId()+1) + " está executando.");
+						System.out.println(" --> Por favor digite um valor, apenas inteiros!!! ");
+						Scanner input = new Scanner(System.in);
+						int nextInt = input.nextInt();
+						memory[translateToPhysicalMemoryAddress(currentIORequest.process, currentIORequest.reg9)].p = nextInt; // armazena o valor digitado
+						memory[translateToPhysicalMemoryAddress(currentIORequest.process, currentIORequest.reg9)].opc = Opcode.DATA; // armazena o valor no DATA
+						System.out.println(" --> Valor armazenado na posição: " + translateToPhysicalMemoryAddress(currentIORequest.process, currentIORequest.reg9) + " --> Valor armazenado: "); // exibe o valor armazenado
+						Aux.dump(memory[translateToPhysicalMemoryAddress(currentIORequest.process, currentIORequest.reg9)]); // exibe o dump de memória com o valor armazenado no registrador 9, salvo como DATA
+						interruptionHandler.handle(Interruptions.interruptionConcorrenteIO);
+						break;
+
+					case 2: // trap output
+						System.out.println("Programa número " + (currentIORequest.process.getProcessUniqueId()+1) + " está executando.");
+						System.out.printf(" --> Output do sistema: \n");
+						//Aux.dump(memory[translateToPhysicalMemoryAddress(currentIORequest.process, currentIORequest.reg9)]);
+						interruptionHandler.handle(Interruptions.interruptionConcorrenteIO);
+						break;
+
+					case -1: // menu
+						System.out.println("\n");
+						System.out.println("\\----------------- Menu do Sistema -----------------/");
+						System.out.println("\n");
+						System.out.println("Opção 1: Opção vazia, deixar o programa em pausa");
+						System.out.println("Opção 2: Rodar a CPU (rode a CPU apenas uma vez)");
+						System.out.println("Opção 3: Realizar o dump de memória");
+						System.out.println("Opção 4: Programa de teste Fatorial");
+						System.out.println("Opção 5: Programa de teste TRAP INPUT");
+						System.out.println("Opção 6: Programa de teste TRAP OUTPUT");
+						System.out.println("Opção 7: Matar os processos e liberar espaço na memória");
+						System.out.println("Opção 0: SAIR");
+						System.out.println("\n");
+						System.out.println("Escolha alguma das opções descritas acima:");
+						Scanner input2 = new Scanner(System.in);
+						int anInt2 = input2.nextInt();
+						System.out.println("/--------------------------------------------------\\");
+						System.out.println("\n");
+						menuOption.add(anInt2);
+						vm.menuSemaphore.release();
+						break;
+
+					default:
+						System.out.println("\n");
+						System.out.println("*************************************************************");
+						System.out.println("Opção invalida do Gerenciador de IO, escolha uma opção válida");
+						System.out.println("*************************************************************");
+						System.out.println("\n");
+						break;
+				}
+			}
+		}
+
+		public void addIO(ProcessControlBlock processControlBlock, int reg8, int reg9) {
+			ioRequestList.add(new IoRequest(processControlBlock, reg8, reg9));
+		}
+
+		public void addIO(ProcessControlBlock processControlBlock, int reg8) {
+			ioRequestList.add(new IoRequest(processControlBlock, reg8));
 		}
 	}
 	// -------------------------------------------------------------------------------------------------------
@@ -576,40 +744,32 @@ public class Sistema {
 		//cria uma nova instancia do sistema
 		Sistema s = new Sistema();
 		//ajusta a flag para o gerenciador de processos exibir mensagens ou nao
-		s.enableProcessMenagerWarnings = true;
+		enableProcessMenagerWarnings = false;
 
 		//test1 - programa que testa fibonnaci		
 		//s.test1();
-
 		//test2 - programa que testa progminimo
 		//s.test2();
-
 		//teste3 - programa que testa fatorial
 		//s.test3();
-
 		//test4 - programa que testa interrupções de endereço invalido
 		//s.test4();
-
 		//teste5 - programa que testa manipulador de chamada de sistema(trap 1 - input)
 		//s.test5();
-
 		//teste6 - programa que testa manipulador de chamada de sistema(trap 2 - output)
 		//s.test6();
-
 		//test7 - programa que testa interrupções de intrução invalida
 		//s.test7();
-
 		//teste8 - programa que testa interrupções de overflow de operações matematicas
 		//s.test8();
-
 		//teste9 - Programa que testa o gerenciador de memória, esse programa apenas carrega a memória com dados "inuteis"
 		//s.test9();
-
 		//test10 - programa que testa o gerenciador de processos, esse programa carrega cinco fatoriais diferentes
-		s.test10();
-
+		//s.test10();
 		//test11 - programa que testa o gerenciador de processos caso ocorra alguma interrupção que quebre o sistema
 		//s.test11();
+
+		s.menu();
 	}
     // -------------------------------------------------------------------------------------------------------
     // --------------- TUDO ABAIXO DE MAIN É AUXILIAR PARA FUNCIONAMENTO DO SISTEMA - nao faz parte 
@@ -618,91 +778,91 @@ public class Sistema {
 	
 	// Programa que testa o programa fibonacci
 	public void test1() {
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p = new Programas().fibonacci10;
 		vm.processManager.createNewProcess(p);
-		aux.dumpBefore(vm.m, 0, 33);
+		Aux.dumpBefore(vm.m, 0, 33);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, 33);
+		Aux.dumpAfter(vm.m, 0, 33);
 	}
 
 	// Programa que testa o programa progMinimo
 	public void test2(){
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p = new Programas().progMinimo;
 		vm.processManager.createNewProcess(p);
-		aux.dumpBefore(vm.m, 0, 15);
+		Aux.dumpBefore(vm.m, 0, 15);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, 15);
+		Aux.dumpAfter(vm.m, 0, 15);
 	}
 
 	// Programa que testa o programa fatorial
 	public void test3(){
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p = new Programas().fatorial;
 		vm.processManager.createNewProcess(p);
-		aux.dumpBefore(vm.m, 0, 15);
+		Aux.dumpBefore(vm.m, 0, 15);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, 15);
+		Aux.dumpAfter(vm.m, 0, 15);
 	}
 
 	// Programa que testa o programa testExercicio
 	public void test4() {
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p = new Programas().testExercicio;
 		vm.processManager.createNewProcess(p);
-		aux.dumpBefore(vm.m, 0, 30);
+		Aux.dumpBefore(vm.m, 0, 30);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, vm.tamMem);
+		Aux.dumpAfter(vm.m, 0, vm.tamMem);
 	}
 
 	// Programa que testa o programa testTrapInput
 	public void test5() {
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p = new Programas().testTrapHandlerInput;
 		vm.processManager.createNewProcess(p);
-		aux.dumpBefore(vm.m, 0, 10);
+		Aux.dumpBefore(vm.m, 0, 10);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, 10);
+		Aux.dumpAfter(vm.m, 0, 10);
 	}
 
 	// Programa que testa o programa testTrapOut
 	public void test6() {
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p = new Programas().testTrapHandlerOutput;
 		vm.processManager.createNewProcess(p);
-		aux.dumpBefore(vm.m, 0, 10);
+		Aux.dumpBefore(vm.m, 0, 10);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, 10);
+		Aux.dumpAfter(vm.m, 0, 10);
 	}
 
 	// Programa que testa o programa testInstructionsInvalid
 	public void test7() {
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p = new Programas().testInvalidInstructions;
 		vm.processManager.createNewProcess(p);
-		aux.dumpBefore(vm.m, 0, 10);
+		Aux.dumpBefore(vm.m, 0, 10);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, 10);
+		Aux.dumpAfter(vm.m, 0, 10);
 	}
 
 	// Programa que testa o programa testInstructionsOverflow
 	public void test8() {
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p = new Programas().testInstructionsOverflow;
 		vm.processManager.createNewProcess(p);
-		aux.dumpBefore(vm.m, 0, 10);
+		Aux.dumpBefore(vm.m, 0, 10);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, 10);
+		Aux.dumpAfter(vm.m, 0, 10);
 	}
 
 	// Programa que testa o programa dummyProgramForMemoryTest - passamos valores para esse programa para mostrar que a memória foi populada com diferentes programas
 	public void test9() {
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p; // palavra responsavel por carregar o programa
 		ArrayList<Boolean> programStatusList = new ArrayList<>(); // array que contem os status de carregamento dos programas
 		
-		aux.dumpBefore(vm.m, 0, 128);
+		Aux.dumpBefore(vm.m, 0, 128);
 
 		p = new Programas().dummyProgramForMemoryTest(1);
 		programStatusList.add(vm.processManager.createNewProcess(p));
@@ -712,13 +872,13 @@ public class Sistema {
 		programStatusList.add(vm.processManager.createNewProcess(p));
 		p = new Programas().dummyProgramForMemoryTest(4);
 		programStatusList.add(vm.processManager.createNewProcess(p));
-		aux.dumpProcessStatus(programStatusList);
-		aux.dumpAfter(vm.m, 0, 128);
+		Aux.dumpProcessStatus(programStatusList);
+		Aux.dumpAfter(vm.m, 0, 128);
 	}
 	
 	// Programa que testa o programa de fatorial, esse teste passa diferentes valores ao fatorial para testar o gerenciador de processos e mostrar que vários programas diferentes rodaram
 	public void test10() {
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p; // palavra responsavel por carregar o programa
 		ArrayList<Boolean> programStatusList = new ArrayList<>(); // array que contem os status de carregamento dos programas
 
@@ -733,16 +893,16 @@ public class Sistema {
 		p = new Programas().fatorialWithValue(2); // criando instancia do programa fatorial de 2
 		programStatusList.add(vm.processManager.createNewProcess(p));
 
-		aux.dumpProcessStatus(programStatusList);
+		Aux.dumpProcessStatus(programStatusList);
 
-		aux.dumpBefore(vm.m, 0, 80);
+		Aux.dumpBefore(vm.m, 0, 80);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, 80);
+		Aux.dumpAfter(vm.m, 0, 80);
 	}
 
 	// Programa que testa vários programas que geram interrupções que quebram o sistema, nesse caso, o gerenciador de processos lida com isso, quando ocorre algum problema ele finaliza o processo em execução
 	public void test11() {
-		Aux aux = new Aux();
+		// Aux aux = new Aux();
 		Word[] p; // palavra responsavel por carregar o programa
 		ArrayList<Boolean> programStatusList = new ArrayList<>(); // array que contem os status de carregamento dos programas
 
@@ -757,17 +917,96 @@ public class Sistema {
 		p = new Programas().testTrapHandlerOutput; // criando instancia do programa que testa chamada de sistema (output)
 		programStatusList.add(vm.processManager.createNewProcess(p));
 
-		aux.dumpProcessStatus(programStatusList);
+		Aux.dumpProcessStatus(programStatusList);
 
-		aux.dumpBefore(vm.m, 0, 128);
+		Aux.dumpBefore(vm.m, 0, 128);
 		vm.processManager.runProcess();
-		aux.dumpAfter(vm.m, 0, 128);
+		Aux.dumpAfter(vm.m, 0, 128);
+	}
+
+	public void menu() {
+		Word[] p;
+		boolean run = true;
+		ArrayList<Boolean> programStatusList = new ArrayList<>();
+		
+		new Thread(() -> {
+			vm.ioManager.start(); // Inicia o gerente de IO
+		}).start();
+
+		while(run) {
+			vm.ioManager.addIO(null, -1); // mostra o menu ao usuario e espera ele digitar um valor valido de input
+			vm.ioManager.ioSemaphore.release();
+			try {
+				vm.menuSemaphore.acquire();
+			} catch (Exception e) {
+				System.out.println("!!! Semaphoro sendo utilizado, ocorreu um erro ao tentar dar acquire !!!"); // caso ocorra algum erro no acquire ele exibe a mensagem
+			}
+			int selection = vm.ioManager.menuOption.get(0);
+			vm.ioManager.menuOption.remove(0);
+			switch(selection) {
+				case 1:
+					System.out.println("\n");
+					System.out.println("Sistema está em pausa");
+					System.out.println("\n");
+					break;
+				case 2:
+					vm.processManager.runProcess();
+					break;
+				case 3:
+					Aux.dumpMemoria(vm.m, 0, 128);
+					break;
+				case 4:
+					System.out.println("\n");
+					programStatusList.clear();
+					System.out.println(" --> De qual numero você deseja saber o fatorial? (DIGITE APENAS NUMEROS INTEIROS): ");
+					Scanner scanner = new Scanner(System.in);
+					int value = scanner.nextInt();
+					p = new Programas().fatorialWithValue(value); // criando instancia do programa fatorial com o numero digitado pelo user
+					programStatusList.add(vm.processManager.createNewProcess(p));
+					Aux.dumpProcessStatus(programStatusList);
+					break;
+				case 5:
+					System.out.println("\n");
+					programStatusList.clear();
+					p = new Programas().testTrapHandlerInput;
+					programStatusList.add(vm.processManager.createNewProcess(p));
+					Aux.dumpProcessStatus(programStatusList);
+					break;
+				case 6:
+					System.out.println("\n");
+					programStatusList.clear();
+					p = new Programas().testTrapHandlerOutput;
+					programStatusList.add(vm.processManager.createNewProcess(p));
+					Aux.dumpProcessStatus(programStatusList);
+					break;
+				case 7:
+					vm.processManager.killAllProcess();
+					System.out.println("\n");
+					System.out.println("******************");
+					System.out.println("Processos finalizados e memória liberada com sucesso!!!");
+					System.out.println("******************");
+					break;
+				case 0:
+					run = false;
+					break;
+				default:
+					System.out.println("\n");
+					System.out.println("******************");
+					System.out.println("Opção invalida do Gerenciador de IO, escolha uma opção válida");
+					System.out.println("******************");
+					System.out.println("\n");
+					break;
+			}
+		}
+
+		vm.cpu.stop();
+		vm.ioManager.stop();
 	}
 
 	// -------------------------------------------  classes e funcoes auxiliares
-    public class Aux {
+    public static class Aux {
 		// método utilizado para formatar o dump da memória
-		public void dump(Word w) {
+		public static void dump(Word w) {
 			System.out.print(" [ "); 
 			System.out.print(w.opc); System.out.print(", ");
 			System.out.print(w.r1);  System.out.print(", ");
@@ -775,8 +1014,26 @@ public class Sistema {
 			System.out.print(w.p);  System.out.println("  ] ");
 		}
 
+		// método utilizado para realizar o dump de memoria da execução do sistema
+		public static void dumpMemoria(Word[] m, int ini, int fim) {
+			System.out.println("---------------------------------------------------------------------------------------");
+			System.out.println("Dump de memória com os programas no sistema: ");
+			for (int i = ini; i < fim; i++) {
+				if (i < 10) {
+					System.out.print(i); System.out.print(":   ");  dump(m[i]);
+				} else if (i < 100) {
+					System.out.print(i); System.out.print(":  ");  dump(m[i]);
+				} else {
+					System.out.print(i); System.out.print(": ");  dump(m[i]);
+				}		
+			}
+			if (enableProcessMenagerWarnings) {
+				System.out.println("---------------------------------------------------------------------------------------");
+			}
+		}
+
 		// método utilizado para realizar o dump de memoria antes a execução do sistema
-		public void dumpBefore(Word[] m, int ini, int fim) {
+		public static void dumpBefore(Word[] m, int ini, int fim) {
 			System.out.println("---------------------------------------------------------------------------------------");
 			System.out.println("Dump de memória antes de executar todos os programas: ");
 			for (int i = ini; i < fim; i++) {
@@ -794,7 +1051,7 @@ public class Sistema {
 		}
 
 		// método utilizado para realizar o dump de memoria após a execução do sistema
-		public void dumpAfter(Word[] m, int ini, int fim) {
+		public static void dumpAfter(Word[] m, int ini, int fim) {
 			System.out.println("---------------------------------------------------------------------------------------");
 			System.out.println("Dump de memória depois de executar todos os programas: ");
 			for (int i = ini; i < fim; i++) {
@@ -812,16 +1069,18 @@ public class Sistema {
 		}
 
 		// esse metodo realiza a impressão do status de cada um dos programas carregados no scheduler
-		public void dumpProcessStatus(ArrayList<Boolean> programStatusList) {
+		public static void dumpProcessStatus(ArrayList<Boolean> programStatusList) {
 			System.out.println("\n");
 			System.out.println("---------------------------------------------------------------------------------------");
 			for (int i = 0; i < programStatusList.size(); i++) {
 				System.out.println((i+1) + " - Processo adicionado a memória com sucesso: " + programStatusList.get(i));
-			}	
+			}
+			System.out.println("---------------------------------------------------------------------------------------");
+			System.out.println("\n");	
 		}
 
 		// método antigo utilizado para carregar o programa na cpu
-		public void carga(Word[] p, Word[] m) {
+		public static void carga(Word[] p, Word[] m) {
 			for (int i = 0; i < p.length; i++) {
 				m[i].opc = p[i].opc;     m[i].r1 = p[i].r1;     m[i].r2 = p[i].r2;     m[i].p = p[i].p;
 			}
